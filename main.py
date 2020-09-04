@@ -57,6 +57,10 @@ def log_loss_info(losses, nepochs):
         '\tValidation set:\t {:.5f} + {:.5f} = {:.5f}'
         .format(*losses)
     )
+    
+    
+def lossFun(heartFake,heartReal)
+    LossH = F.l1_loss(out, data.reshape(-1, coma.filters[0]))
 
 
 def main(config):
@@ -131,7 +135,8 @@ def main(config):
 
     logger.info('Loading CoMA model')
     #TODO: print architecture of the network
-    coma = Coma(config, D_t, U_t, A_t, num_nodes)
+    tabDims = [len(pData.contXinds),len(pData.catgXinds),len(pData.contCinds),len(pData.catgCinds)]
+    coma = Coma(config, D_t, U_t, A_t, num_nodes, tabDims)
 
     #TODO: Use a dictionary to map the configuration parameters to this behaviour
     #TODO: print configuration of the optimizer in the logs
@@ -272,14 +277,35 @@ def train(coma, dataloader, optimizer, device):
     total_loss = 0
     total_kld_loss = 0
     total_recon_loss = 0
-    for i, (data, ids) in enumerate(dataloader):
+    # for i, (data, ids) in enumerate(dataloader):
+    # Let's say we've modified the dataloader to return
+    # (ids,xContReal,xCatgReal,xMaskReal,data)
+    for i, (ids,xContReal,xCatgReal,xMaskReal,data) in enumerate(dataloader):
+        xContReal = xContReal.to(device)
+        xCatgReal = xCatgReal.to(device)
+        xMaskReal = xMaskReal.to(device)
         data = data.to(device)
-        batch_size = data.size(0)
+        batch_size = xContReal.size(0)
+        contCreal = Variable(xContReal[:,pData.contCinds])
+        catgCreal = Variable(xCatgReal[:,pData.catgCinds])
+        contXreal = Variable(xContReal[:,pData.contXinds])
+        catgXreal = Variable(xCatgReal[:,pData.catgXinds])
+        
         optimizer.zero_grad()
-        out = coma(data)
+        out, contXfake, catgXfake, contCfake, catgCfake = coma(data, contXreal, catgXreal, contCreal, catgCreal)
         recon_loss = F.l1_loss(out, data.reshape(-1, coma.filters[0]))
+        
+        ### tabular losses
+        with torch.no_grad(): # To avoid computing errors where inputs are missing
+            contXrealAux = torch.where(contXreal==-1.,contXfake,contXreal) 
+        tabContLoss = 50*F.mse_loss(contXfake,contXrealAux, reduction ='sum')
+        tabCatgLoss = F.binary_cross_entropy(catgXfake, catgXreal, weight = xMaskReal, reduction='sum')
+        
         total_recon_loss += batch_size * recon_loss.item()
         loss = recon_loss
+        ### add tabular loss
+        loss += tabContLoss + tabCatgLoss
+        
         if coma.is_variational:
             # https://stats.stackexchange.com/questions/7440/kl-divergence-between-two-univariate-gaussians
             kld_loss = -0.5 * torch.mean(torch.mean(1 + coma.log_var - coma.mu ** 2 - coma.log_var.exp(), dim=1), dim=0)
